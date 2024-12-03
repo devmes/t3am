@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace In2code\T3AM\Client;
 
 /*
@@ -18,7 +20,10 @@ namespace In2code\T3AM\Client;
  * GNU General Public License for more details.
  */
 
+use Doctrine\DBAL\Exception;
+use TYPO3\CMS\Core\Context\Context;
 use Psr\Log\LoggerInterface;
+use TYPO3\CMS\Core\Context\Exception\AspectNotFoundException;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Log\LogManager;
@@ -29,7 +34,9 @@ use TYPO3\CMS\Core\Resource\Exception\InsufficientFolderAccessPermissionsExcepti
 use TYPO3\CMS\Core\Resource\Exception\InsufficientFolderWritePermissionsException;
 use TYPO3\CMS\Core\Resource\ProcessedFileRepository;
 use TYPO3\CMS\Core\Resource\ResourceFactory;
+use TYPO3\CMS\Core\Resource\StorageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+
 use function array_key_exists;
 use function array_keys;
 use function base64_decode;
@@ -38,32 +45,29 @@ use function explode;
 use function file_put_contents;
 use function is_array;
 use function rtrim;
+use function settype;
 use function time;
 
 /**
  * Class UserRepository
+ *
+ * @SuppressWarnings(PHPMD.CouplingBetweenObjects)
  */
 class UserRepository
 {
-    /**
-     * @var ConnectionPool
-     */
-    protected $connection = null;
+    protected ?ConnectionPool $connection = null;
 
-    /**
-     * @var Client
-     */
-    protected $client = null;
+    protected ?Client $client = null;
 
-    /**
-     * @var Config
-     */
-    protected $config = null;
+    protected ?Config $config = null;
 
-    /**
-     * @var LoggerInterface
-     */
-    protected $logger = null;
+    protected ?LoggerInterface $logger = null;
+
+    protected array $types = [
+        'deleted' => 'int',
+        'disable' => 'int',
+        'admin' => 'int',
+    ];
 
     /**
      * BackendUserRepository constructor.
@@ -79,61 +83,13 @@ class UserRepository
     }
 
     /**
-     * @param array $foreignUserRow
-     *
-     * @return array
+     * @throws Exception
      */
-    public function processUserRow(array $foreignUserRow): array
-    {
-        if (!isset($foreignUserRow['username'])) {
-            return [];
-        }
-
-        $foreignUserRow = $this->filterForeignUserRowByLocalFields($foreignUserRow);
-
-        $localUserRow = $this->fetchBeUser($foreignUserRow['username']);
-
-        if (empty($localUserRow)) {
-            $this->createUser($foreignUserRow);
-        } elseif ($this->shouldUpdate($localUserRow, $foreignUserRow)) {
-            $this->updateUser($foreignUserRow);
-        } else {
-            return $localUserRow;
-        }
-
-        $localUserRow = $this->fetchBeUser($foreignUserRow['username']);
-        if ($this->config->synchronizeImages()) {
-            $this->synchronizeImage($localUserRow);
-        }
-
-        return $localUserRow;
-    }
-
-    /**
-     * @param string $username
-     *
-     * @return bool
-     */
-    public function removeUser($username)
-    {
-        $queryBuilder = $this->connection->getQueryBuilderForTable('be_user');
-        return $queryBuilder
-            ->delete('be_users')
-            ->from('be_users')
-            ->where($queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($username)))
-            ->execute();
-    }
-
-    /**
-     * @param array $user
-     *
-     * @return bool
-     */
-    protected function synchronizeImage(array $user)
+    public function synchronizeImage(array $user): bool
     {
         try {
             $imageData = $this->client->getUserImage($user['username']);
-        } catch (ClientException $e) {
+        } catch (ClientException) {
             return false;
         }
 
@@ -141,30 +97,31 @@ class UserRepository
             return false;
         }
 
-        $this->deletePreviousAvatars($user);
-
         try {
+            $this->deletePreviousAvatars($user);
             $this->updateAvatar($user, $imageData);
-        } catch (ExistingTargetFolderException $e) {
-        } catch (IllegalFileExtensionException $e) {
-        } catch (InsufficientFolderWritePermissionsException $e) {
-        } catch (InsufficientFolderAccessPermissionsException $e) {
+        } catch (
+            ExistingTargetFolderException|
+            IllegalFileExtensionException|
+            InsufficientFolderWritePermissionsException|
+            InsufficientFolderAccessPermissionsException
+        ) {
+            return false;
         }
 
         return true;
     }
 
     /**
-     * @param array $user
-     *
-     * @return bool
+     * @throws                                  Exception
+     * @SuppressWarnings(PHPMD.EmptyCatchBlock)
      */
     protected function deletePreviousAvatars(array $user): bool
     {
         $processedFileRepo = GeneralUtility::makeInstance(ProcessedFileRepository::class);
-        $resourceFactory = ResourceFactory::getInstance();
+        $resourceFactory = GeneralUtility::makeInstance(ResourceFactory::class);
 
-        /** @var QueryBuilder $queryBuilder */
+        /* @var QueryBuilder $queryBuilder */
         $queryBuilder = $this->connection->getQueryBuilderForTable('sys_file_reference');
         $rows = $queryBuilder
             ->select('*')
@@ -174,8 +131,8 @@ class UserRepository
                 "`tablenames` = 'be_users'",
                 "`fieldname` = 'avatar'"
             )
-            ->execute()
-            ->fetchAll();
+            ->executeQuery()
+            ->fetchAllAssociative();
 
         foreach ($rows as $row) {
             $queryBuilder = $this->connection->getQueryBuilderForTable('sys_file_reference');
@@ -183,8 +140,8 @@ class UserRepository
                 ->select('*')
                 ->from('sys_file_reference')
                 ->where($queryBuilder->expr()->eq('uid_local', (int)$row['uid']))
-                ->execute()
-                ->fetchAll();
+                ->executeQuery()
+                ->fetchAllAssociative();
 
             if (count($references) === 1) {
                 try {
@@ -195,7 +152,7 @@ class UserRepository
                         $processedFile->delete(true);
                     }
                     $file->delete();
-                } catch (FileDoesNotExistException $e) {
+                } catch (FileDoesNotExistException) {
                 }
             }
         }
@@ -208,27 +165,26 @@ class UserRepository
                 "`tablenames` = 'be_users'",
                 "`fieldname` = 'avatar'"
             )
-            ->execute();
+            ->executeStatement();
     }
 
     /**
-     * @param array $user
-     * @param array $imageData
      *
      * @throws ExistingTargetFolderException
      * @throws InsufficientFolderAccessPermissionsException
      * @throws InsufficientFolderWritePermissionsException
      * @throws IllegalFileExtensionException
      */
-    protected function updateAvatar(array $user, array $imageData)
+    protected function updateAvatar(array $user, array $imageData): void
     {
         $processedFileRep = GeneralUtility::makeInstance(ProcessedFileRepository::class);
-        $resourceFactory = ResourceFactory::getInstance();
+        $resourceFactory = GeneralUtility::makeInstance(ResourceFactory::class);
 
         $avatarFolder = $this->config->getAvatarFolder();
-        list($storageId, $folderId) = explode(':', $avatarFolder);
-        $storage = $resourceFactory->getStorageObject($storageId);
-        $storage->setEvaluatePermissions(false);
+        [$storageId, $folderId] = explode(':', $avatarFolder);
+
+        $storageRepository = GeneralUtility::makeInstance(StorageRepository::class);
+        $storage = $storageRepository->getStorageObject((int)$storageId);
 
         if (!$storage->hasFolder($folderId)) {
             $folder = $storage->createFolder($folderId);
@@ -237,7 +193,9 @@ class UserRepository
         }
 
         $tmpFile = GeneralUtility::tempnam('t3am_avatar');
-        file_put_contents($tmpFile, base64_decode($imageData['b64content']));
+        file_put_contents($tmpFile, base64_decode((string) $imageData['b64content']));
+
+
 
         if (!$folder->hasFile($imageData['identifier'])) {
             $file = $folder->addFile($tmpFile, $imageData['identifier']);
@@ -249,21 +207,20 @@ class UserRepository
         }
 
         // Always insert the new file reference, because the old one is always deleted
-        /** @var QueryBuilder $queryBuilder */
+        /* @var QueryBuilder $queryBuilder */
         $queryBuilder = $this->connection->getQueryBuilderForTable('sys_file_reference');
         $queryBuilder->insert('sys_file_reference')
-                     ->values(
-                         [
+            ->values(
+                [
                              'tstamp' => time(),
                              'crdate' => time(),
                              'uid_local' => $file->getUid(),
                              'uid_foreign' => $user['uid'],
                              'tablenames' => 'be_users',
                              'fieldname' => 'avatar',
-                             'table_local' => 'sys_file',
                          ]
-                     )
-                     ->execute();
+            )
+            ->executeStatement();
 
         $processedFiles = $processedFileRep->findAllByOriginalFile($file);
         foreach ($processedFiles as $processedFile) {
@@ -276,7 +233,7 @@ class UserRepository
      *
      * @param $user
      *
-     * @return bool
+     * @throws Exception
      */
     protected function createUser($user): bool
     {
@@ -287,15 +244,15 @@ class UserRepository
             ->from('be_users')
             ->where($queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($user['username'])))
             ->setMaxResults(1)
-            ->execute()
-            ->fetchColumn();
+            ->executeQuery()
+            ->fetchOne();
 
         if (0 === $count) {
             $this->connection
                 ->getQueryBuilderForTable('be_user')
                 ->insert('be_users')
                 ->values($user)
-                ->execute();
+                ->executeStatement();
 
             return true;
         }
@@ -306,9 +263,8 @@ class UserRepository
     /**
      * overwrite the local user settings, with settings of central t3am server
      *
-     * @param array $user
-     *
      * @return bool true, if settings of the be user where updated
+     * @throws Exception
      */
     protected function updateUser(array $user): bool
     {
@@ -319,8 +275,8 @@ class UserRepository
             ->from('be_users')
             ->where($queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($user['username'])))
             ->setMaxResults(1)
-            ->execute()
-            ->fetchColumn();
+            ->executeQuery()
+            ->fetchOne();
 
         $queryBuilder = $this->connection->getQueryBuilderForTable('be_users');
         $queryBuilder->update('be_users');
@@ -329,15 +285,13 @@ class UserRepository
         }
         $queryBuilder
             ->where($queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($user['username'])))
-            ->execute();
+            ->executeStatement();
 
         return $lastChangeTimestamp !== $user['tstamp'];
     }
 
     /**
-     * @param string $username
-     *
-     * @return array
+     * @throws Exception
      */
     protected function fetchBeUser(string $username): array
     {
@@ -348,8 +302,8 @@ class UserRepository
             ->from('be_users')
             ->where($queryBuilder->expr()->eq('username', $queryBuilder->createNamedParameter($username)))
             ->setMaxResults(1)
-            ->execute()
-            ->fetch();
+            ->executeQuery()
+            ->fetchAssociative();
         if (!is_array($result)) {
             return [];
         }
@@ -357,9 +311,7 @@ class UserRepository
     }
 
     /**
-     * @param array $info
-     *
-     * @return array
+     * @throws Exception
      */
     protected function filterForeignUserRowByLocalFields(array $info): array
     {
@@ -368,16 +320,19 @@ class UserRepository
         $newUser = [];
         foreach ($fields as $field) {
             if (isset($info[$field])) {
-                $newUser[$field] = $info[$field];
+                $value = $info[$field];
+                if (isset($this->types[$field])) {
+                    settype($value, $this->types[$field]);
+                }
+
+                $newUser[$field] = $value;
             }
         }
         return $newUser;
     }
 
     /**
-     * @param array $localUserRow
-     * @param array $foreignUserRow
-     * @return bool
+     * @throws AspectNotFoundException
      */
     protected function shouldUpdate(array $localUserRow, array $foreignUserRow): bool
     {
@@ -387,8 +342,9 @@ class UserRepository
     }
 
     /**
-     * @param array $user
-     * @return bool
+     * @param                                array $user
+     * @return                               bool
+     * @SuppressWarnings(PHPMD.Superglobals)
      */
     protected function isDeleted(array $user): bool
     {
@@ -408,15 +364,16 @@ class UserRepository
     }
 
     /**
-     * @param array $user
-     * @return bool
+     * @throws                                       AspectNotFoundException
+     * @SuppressWarnings(PHPMD.Superglobals)
+     * @SuppressWarnings(PHPMD.CyclomaticComplexity)
      */
     protected function isDisabled(array $user): bool
     {
         if (isset($GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['disabled'])) {
             $field = $GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['disabled'];
             if (array_key_exists($field, $user)) {
-                if ((bool)$user[$field]) {
+                if ($user[$field]) {
                     return true;
                 }
             } else {
@@ -430,7 +387,10 @@ class UserRepository
         if (isset($GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['starttime'])) {
             $field = $GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['starttime'];
             if (array_key_exists($field, $user)) {
-                if ($GLOBALS['EXEC_TIME'] < $user[$field]) {
+                if (
+                    GeneralUtility::makeInstance(Context::class)
+                        ->getPropertyFromAspect('date', 'timestamp') < $user[$field]
+                ) {
                     return true;
                 }
             } else {
@@ -444,7 +404,11 @@ class UserRepository
         if (isset($GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['endtime'])) {
             $field = $GLOBALS['TCA']['be_users']['ctrl']['enablecolumns']['endtime'];
             if (array_key_exists($field, $user)) {
-                if (0 !== (int)$user[$field] && $GLOBALS['EXEC_TIME'] > $user[$field]) {
+                if (
+                    0 !== (int)$user[$field]
+                    && GeneralUtility::makeInstance(Context::class)
+                        ->getPropertyFromAspect('date', 'timestamp') > $user[$field]
+                ) {
                     return true;
                 }
             } else {
@@ -458,11 +422,6 @@ class UserRepository
         return false;
     }
 
-    /**
-     * @param array $localUserRow
-     * @param array $foreignUserRow
-     * @return bool
-     */
     protected function isOutDated(array $localUserRow, array $foreignUserRow): bool
     {
         return $localUserRow['tstamp'] !== $foreignUserRow['tstamp'];

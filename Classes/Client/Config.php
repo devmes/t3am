@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace In2code\T3AM\Client;
 
 /*
@@ -22,12 +24,12 @@ use TYPO3\CMS\Core\Configuration\Exception\ExtensionConfigurationPathDoesNotExis
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+
 use function gettype;
 use function is_array;
 use function parse_url;
 use function rtrim;
 use function settype;
-use function version_compare;
 
 /**
  * Class Config
@@ -36,10 +38,8 @@ class Config implements SingletonInterface
 {
     /**
      * Default configuration values
-     *
-     * @var array
      */
-    protected $values = [
+    protected array $values = [
         'server' => '',
         'token' => '',
         'avatarFolder' => '',
@@ -53,17 +53,14 @@ class Config implements SingletonInterface
      */
     public function __construct()
     {
-        if (version_compare(TYPO3_branch, '9.5', '>=')) {
-            try {
-                $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('t3am');
-            } catch (ExtensionConfigurationExtensionNotConfiguredException $e) {
-            } catch (ExtensionConfigurationPathDoesNotExistException $e) {
-            }
-        } else {
-            if (!empty($GLOBALS['TYPO3_CONF_VARS']['EXT']['extConf']['t3am'])) {
-                $config = unserialize($GLOBALS['TYPO3_CONF_VARS']['EXT']['extConf']['t3am']);
-            }
+        try {
+            $config = GeneralUtility::makeInstance(ExtensionConfiguration::class)->get('t3am');
+        } catch (
+            ExtensionConfigurationExtensionNotConfiguredException|ExtensionConfigurationPathDoesNotExistException
+        ) {
+            $config = [];
         }
+
         if (isset($config) && is_array($config)) {
             foreach ($this->values as $option => $default) {
                 if (isset($config[$option])) {
@@ -75,63 +72,57 @@ class Config implements SingletonInterface
         }
     }
 
-    /**
-     * @return bool
-     */
     public function isValid(): bool
     {
-        $parts = parse_url($this->values['server']);
-        return !empty($parts['scheme']) && !empty($parts['host']) && !empty($this->values['token']) && $this->ping();
+        if (!empty(($this->values['server']))) {
+            $parts = parse_url((string) $this->values['server']);
+            return !empty($parts['scheme'])
+                && !empty($parts['host'])
+                && !empty($this->values['token'])
+                && $this->ping();
+        } else {
+            return false;
+        }
     }
 
-    /**
-     * @return string
-     */
     public function getServer(): string
     {
-        return rtrim($this->values['server'], '/') . '/';
+        return rtrim(!empty($this->values['server']) ? $this->values['server'] : '', '/') . '/';
     }
 
-    /**
-     * @return string
-     */
     public function getToken(): string
     {
-        return $this->values['token'];
+        if (!empty($this->values['token'])) {
+            return $this->values['token'];
+        } else {
+            return '';
+        }
     }
 
-    /**
-     * @return bool
-     */
     public function synchronizeImages(): bool
     {
         return !empty($this->values['avatarFolder']);
     }
 
-    /**
-     * @return string
-     */
     public function getAvatarFolder(): string
     {
         return $this->values['avatarFolder'];
     }
 
-    /**
-     * @return bool
-     */
     public function allowSelfSigned(): bool
     {
-        return $this->values['selfSigned'];
+        if (!empty($this->values['selfSigned'])) {
+            return $this->values['selfSigned'];
+        } else {
+            return false;
+        }
     }
 
-    /**
-     * @return bool
-     */
     protected function ping(): bool
     {
         try {
             return GeneralUtility::makeInstance(Client::class)->ping();
-        } catch (ClientException $e) {
+        } catch (ClientException) {
             return false;
         }
     }

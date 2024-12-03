@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace In2code\T3AM\Client;
 
 /*
@@ -18,8 +20,10 @@ namespace In2code\T3AM\Client;
  */
 
 use Psr\Log\LoggerInterface;
+use TYPO3\CMS\Core\Http\RequestFactory;
 use TYPO3\CMS\Core\Log\LogManager;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+
 use function array_merge;
 use function http_build_query;
 use function is_string;
@@ -30,15 +34,9 @@ use function json_decode;
  */
 class Client
 {
-    /**
-     * @var Config
-     */
-    protected $config = null;
+    protected ?Config $config = null;
 
-    /**
-     * @var LoggerInterface
-     */
-    protected $logger = null;
+    protected ?LoggerInterface $logger = null;
 
     /**
      * Authenticator constructor.
@@ -50,8 +48,6 @@ class Client
     }
 
     /**
-     * @return array
-     *
      * @throws ClientException
      */
     public function getEncryptionKey(): array
@@ -60,10 +56,6 @@ class Client
     }
 
     /**
-     * @param string $user
-     *
-     * @return string
-     *
      * @throws ClientException
      */
     public function getUserState(string $user): string
@@ -72,10 +64,6 @@ class Client
     }
 
     /**
-     * @param string $user
-     *
-     * @return array
-     *
      * @throws ClientException
      */
     public function getUserRow(string $user): array
@@ -84,24 +72,18 @@ class Client
     }
 
     /**
-     * @param string $user
-     *
-     * @return array
-     *
      * @throws ClientException
      */
     public function getUserImage(string $user): array
     {
-        return $this->request('user/image', ['user' => $user]);
+        $returnValue = $this->request('user/image', ['user' => $user]);
+        if (!is_array($returnValue)){
+            throw new ClientException();
+        }
+        return $returnValue;
     }
 
     /**
-     * @param string $user
-     * @param string $password
-     * @param int $encryptionId
-     *
-     * @return bool
-     *
      * @throws ClientException
      */
     public function authUser(string $user, string $password, int $encryptionId): bool
@@ -110,8 +92,6 @@ class Client
     }
 
     /**
-     * @return bool
-     *
      * @throws ClientException
      */
     public function ping(): bool
@@ -120,16 +100,11 @@ class Client
     }
 
     /**
-     * @param string $route
-     * @param array $arguments
-     *
-     * @return mixed
-     *
      * @throws ClientException
      *
      * @SuppressWarnings(PHPMD.Superglobals)
      */
-    protected function request(string $route, array $arguments = [])
+    protected function request(string $route, array $arguments = []): mixed
     {
         $query = http_build_query(array_merge(['route' => $route, 'token' => $this->config->getToken()], $arguments));
 
@@ -138,7 +113,7 @@ class Client
         if (!is_string($response)) {
             throw new ClientException('The API endpoint did not return a valid response');
         }
-        $apiResult = json_decode($response, true);
+        $apiResult = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
 
         $result = false;
         if (isset($apiResult['error']) && false === $apiResult['error'] && isset($apiResult['data'])) {
@@ -149,13 +124,9 @@ class Client
     }
 
     /**
-     * @param string $url
-     *
-     * @return mixed
-     *
      * @SuppressWarnings(PHPMD.Superglobals)
      */
-    protected function getUrl(string $url)
+    protected function getUrl(string $url): false|string
     {
         $verify = $GLOBALS['TYPO3_CONF_VARS']['HTTP']['verify'];
         if (true === $this->config->allowSelfSigned()) {
@@ -163,14 +134,16 @@ class Client
         }
 
         $report = [];
-        $response = GeneralUtility::getUrl($url, 0, null, $report);
+        $response = GeneralUtility::makeInstance(RequestFactory::class)->request($url);
+        $report['error'] = $response->getStatusCode();
+        $content = $response->getBody()->getContents();
 
         $GLOBALS['TYPO3_CONF_VARS']['HTTP']['verify'] = $verify;
 
-        if ($report['error'] !== 0) {
+        if (!empty($report['error']) && $report['error'] !== 200) {
             $this->logger->error('Received error on T3AM client request', $report);
         }
 
-        return $response;
+        return $content;
     }
 }

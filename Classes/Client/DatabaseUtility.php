@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace In2code\T3AM\Client;
 
 /*
@@ -17,7 +19,7 @@ namespace In2code\T3AM\Client;
  * GNU General Public License for more details.
  */
 
-use Doctrine\DBAL\DBALException;
+use Doctrine\DBAL\Exception;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -28,22 +30,20 @@ class DatabaseUtility
 {
     /**
      * Get column definitions from table
-     * This is a alternative for TYPO3's DatabaseConnection :: admin_get_fields
+     * This is an alternative for TYPO3's DatabaseConnection :: admin_get_fields
      *
-     * @param string $tableName
-     *
-     * @return array
+     * @throws Exception
      */
     public static function getColumnsFromTable(string $tableName): array
     {
         $output = [];
         $connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable($tableName);
         try {
-            $statement = $connection->query('SHOW FULL COLUMNS FROM `' . $tableName . '`');
-        } catch (DBALException $e) {
+            $statement = $connection->executeQuery('SHOW FULL COLUMNS FROM `' . $tableName . '`');
+        } catch (Exception) {
             return [];
         }
-        while ($fieldRow = $statement->fetch()) {
+        while ($fieldRow = $statement->fetchAssociative()) {
             $output[$fieldRow['Field']] = $fieldRow;
         }
 

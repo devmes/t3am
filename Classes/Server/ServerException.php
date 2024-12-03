@@ -1,10 +1,11 @@
 <?php
+
 declare(strict_types=1);
-namespace In2code\T3AM\Client;
+
+namespace In2code\T3AM\Server;
 
 /*
- * (c) 2018 in2code GmbH https://www.in2code.de
- * Oliver Eglseder <php@vxvr.de>
+ * Copyright (C) 2018 Oliver Eglseder <php@vxvr.de>, in2code GmbH
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,10 +19,19 @@ namespace In2code\T3AM\Client;
  */
 
 use Exception;
+use ReflectionException;
 
-/**
- * Class ClientException
- */
-class ClientException extends Exception
+use function sprintf;
+
+class ServerException extends Exception
 {
+    public static function forMissingParameter(string $parameter): ServerException
+    {
+        return new self(sprintf('Missing parameter $%s', $parameter), 1496395204);
+    }
+
+    public static function forInvalidRouteTarget(ReflectionException $exception): ServerException
+    {
+        return new self('Can not examine route target', 1520607184, $exception);
+    }
 }
