@@ -11,7 +11,7 @@ $EM_CONF['t3am'] = [
     'version' => '5.0.0',
     'constraints' => [
         'depends' => [
-            'typo3' => '12.3.0-12.4.99',
+            'typo3' => '12.3.0-13.4.99',
         ],
         'conflicts' => [],
         'suggests' => [],
