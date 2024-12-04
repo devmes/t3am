@@ -61,7 +61,7 @@ class UserFactory
         foreach ($user->jsonSerialize() as $field => $value) {
             if (isset($columns[strtolower($field)])) {
                 // Risky attempt here but as long as all fields are string or integer types we'll be fine
-                match ($columns[strtolower($field)]->getType()->getName()) {
+                match ($columns[strtolower($field)]->getType()->lookupName($columns[strtolower($field)]->getType())) {
                     Types::BIGINT, Types::BINARY, Types::INTEGER, Types::DECIMAL, Types::SMALLINT
                         => settype($value, 'int'),
                     Types::FLOAT => settype($value, 'float'),
